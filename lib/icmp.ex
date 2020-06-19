@@ -1,6 +1,9 @@
 defmodule Icmp do
 
   defmodule Entry do
+    @moduledoc false
+    # just a struct that describes what an icmp wait entry looks like.
+
     @enforce_keys [:ip, :seq, :from, :ttl]
     defstruct @enforce_keys
 
@@ -12,7 +15,13 @@ defmodule Icmp do
     }
   end
 
-  @init %{select: nil}
+  @type state :: %{
+    optional(0..0xFFFF) => Entry.t,
+    select: reference(),
+    module: module(),
+  }
+
+  @init_state %{select: nil, module: :socket}
 
   alias Icmp.Packet
   require IP
@@ -28,14 +37,19 @@ defmodule Icmp do
   end
 
   # :gen callback
-  def init_it(parent, _, _, name, _args, _opts) do
+  def init_it(parent, _, _, name, args, _opts) do
     name && Process.register(self(), name)
     Process.flag(:trap_exit, true)
-    case :socket.open(:inet, :raw, :icmp) do
+
+    state = args
+    |> Keyword.take([:module])
+    |> Enum.into(@init_state)
+
+    case state.module.open(:inet, :raw, :icmp) do
       {:ok, socket} ->
         :proc_lib.init_ack(parent, {:ok, self()})
         Process.monitor(parent)
-        do_loop(socket, @init)
+        do_loop(socket, state)
       error = {:error, _} ->
         :proc_lib.init_ack(parent, error)
     end
@@ -67,47 +81,47 @@ defmodule Icmp do
       if seq, do: {:pang, seq}, else: :pang
   end
 
-  def do_loop(socket, targets) do
-    msg_or_icmp(socket, clear_dead(targets))
+  def do_loop(socket, state) do
+    msg_or_icmp(socket, clear_dead(state))
   end
 
-  defp msg_or_icmp(socket, targets) do
+  defp msg_or_icmp(socket, state) do
     receive do
       msg ->
-        handle_msg(msg, socket, targets)
+        handle_msg(msg, socket, state)
     after
       0 ->
-        check_socket(socket, targets)
+        check_socket(socket, state)
     end
   end
 
-  defp check_socket(socket, targets!) do
-    with {:ok, {ip, data}} <- :socket.recvfrom(socket, [], :nowait),
-         {:ok, targets!} <- handle_ping(ip, data, targets!) do
-      do_loop(socket, targets!)
+  defp check_socket(socket, state! = %{module: module}) do
+    with {:ok, {ip, data}} <- module.recvfrom(socket, [], :nowait),
+         {:ok, state!} <- handle_ping(ip, data, state!) do
+      do_loop(socket, state!)
     else
       {:select, select_ref} ->
-        do_loop(socket, Map.put(targets!, :select, select_ref))
+        do_loop(socket, Map.put(state!, :select, select_ref))
       _error ->
-        do_loop(socket, targets!)
+        do_loop(socket, state!)
     end
   end
 
   defp handle_msg({:"$socket", socket, :select, ref},
                   socket,
-                  targets = %{select: {_, _, ref}}) do
+                  state = %{select: {_, _, ref}}) do
     # return to the socket loop
-    check_socket(socket, Map.delete(targets, :select))
+    check_socket(socket, Map.delete(state, :select))
   end
-  defp handle_msg({:"$socket", _, _, _}, socket, targets) do
+  defp handle_msg({:"$socket", _, _, _}, socket, state) do
     # drop unidentifiable socket messages.
-    do_loop(socket, targets)
+    do_loop(socket, state)
   end
-  defp handle_msg({:"$gen_call", from, {:ping, ip, seq, timeout}}, socket, targets) do
+  defp handle_msg({:"$gen_call", from, {:ping, ip, seq, timeout}}, socket, state) do
     packet = %Packet{id: Packet.hash(from), seq: seq}
     |> Packet.encode()
 
-    case :socket.sendto(socket, packet, addr(ip)) do
+    case state.module.sendto(socket, packet, addr(ip)) do
       :ok ->
         entry = %Entry{
           from: from,
@@ -116,33 +130,33 @@ defmodule Icmp do
           ttl: DateTime.add(DateTime.utc_now(), timeout, :millisecond)
         }
 
-        do_loop(socket, Map.put(targets, Packet.hash(from), entry))
+        do_loop(socket, Map.put(state, Packet.hash(from), entry))
       _error ->
-        do_loop(socket, targets)
+        do_loop(socket, state)
     end
   end
-  defp handle_msg({:EXIT, _, _}, socket, _) do
+  defp handle_msg({:EXIT, _, _}, socket, state) do
     # trap exits and clean up the socket gracefully.
-    :socket.close(socket)
+    state.module.close(socket)
   end
 
-  defp handle_ping(sockaddr, data, targets) when is_binary(data) do
+  defp handle_ping(sockaddr, data, state) when is_binary(data) do
     # TODO: change this to a `with` chain.
     packet = data
     |> Packet.behead
     |> Packet.decode
 
     if packet do
-      handle_ping(sockaddr.addr, packet, targets)
+      handle_ping(sockaddr.addr, packet, state)
     else
       {:error, :foo}
     end
   end
 
-  defp handle_ping(ip, %{id: id, seq: seq, type: :echo_reply}, targets)
-      when is_map_key(targets, id) do
+  defp handle_ping(ip, %{id: id, seq: seq, type: :echo_reply}, state)
+      when is_map_key(state, id) do
     # verify that everything else matches.
-    entry = targets[id]
+    entry = state[id]
     cond do
       ip != entry.ip ->
         {:error, :ip}
@@ -151,12 +165,12 @@ defmodule Icmp do
       true ->
         GenServer.reply(entry.from, :pong)
     end
-    {:ok, Map.delete(targets, id)}
+    {:ok, Map.delete(state, id)}
   end
-  defp handle_ping(_, _, targets), do: {:ok, targets}
+  defp handle_ping(_, _, state), do: {:ok, state}
 
-  #defp hibernate(socket, targets) do
-  #  :proc_lib.hibernate(__MODULE__, :do_loop, [socket, targets])
+  #defp hibernate(socket, state) do
+  #  :proc_lib.hibernate(__MODULE__, :do_loop, [socket, state])
   #end
 
   defp addr(ip), do: %IP.SockAddr{
@@ -165,8 +179,8 @@ defmodule Icmp do
     addr: ip
   }
 
-  defp clear_dead(targets) do
-    targets
+  defp clear_dead(state) do
+    state
     |> Enum.filter(fn {k, v} ->
       is_atom(k) or
       (DateTime.compare(v.ttl, DateTime.utc_now) == :gt)
