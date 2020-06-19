@@ -1,8 +1,10 @@
 defmodule IcmpTest do
   use ExUnit.Case
 
-  @cloudflare {1, 1, 1, 1}
-  @localhost {127, 0, 0, 1}
+  import IP
+
+  @cloudflare ~i"1.1.1.1"
+  @localhost ~i"127.0.0.1"
   @google "www.google.com"
 
   describe "with a new icmp connection" do
@@ -27,12 +29,12 @@ defmodule IcmpTest do
       assert :pong = Icmp.ping(@cloudflare)
     end
 
-  #  test "we can ping localhost" do
-  #    assert :pong = Icmp.ping(@localhost)
-  #  end
-#
-  #  test "with a string" do
-  #    assert :pong = Icmp.ping(@google)
-  #  end
+    test "we can ping localhost" do
+      assert :pong = Icmp.ping(@localhost)
+    end
+
+    test "with a string" do
+      assert :pong = Icmp.ping(@google)
+    end
   end
 end

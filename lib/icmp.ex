@@ -55,33 +55,10 @@ defmodule Icmp do
     end
   end
 
-  # API
-  def ping(icmp \\ __MODULE__, addr, timeout \\ 5000, seq \\ nil) do
-    do_ping(icmp, addr, timeout, seq)
-  end
+  #############################################################################
+  ## PROCESS LOOP
 
-  def do_ping(icmp, addr, timeout, seq) when is_binary(addr) do
-    do_ping(icmp, String.to_charlist(addr), timeout, seq)
-  end
-
-  def do_ping(icmp, addr, timeout, seq) when is_list(addr) do
-    case :inet.getaddrs(addr, :inet) do
-      {:ok, []} -> {:error, :enoaddr}
-      {:ok, lst} when is_list(lst) ->
-        do_ping(icmp, hd(lst), timeout, seq)
-      error -> error
-    end
-  end
-
-  def do_ping(icmp, addr, timeout, seq) when IP.is_ipv4(addr) do
-    res = GenServer.call(icmp, {:ping, addr, seq || 0, timeout}, timeout)
-    if seq, do: {res, seq}, else: res
-  catch
-    :exit, {:timeout, _} ->
-      if seq, do: {:pang, seq}, else: :pang
-  end
-
-  def do_loop(socket, state) do
+  defp do_loop(socket, state) do
     msg_or_icmp(socket, clear_dead(state))
   end
 
@@ -107,17 +84,35 @@ defmodule Icmp do
     end
   end
 
-  defp handle_msg({:"$socket", socket, :select, ref},
-                  socket,
-                  state = %{select: {_, _, ref}}) do
-    # return to the socket loop
-    check_socket(socket, Map.delete(state, :select))
+  #############################################################################
+  ## API
+
+  def ping(icmp \\ __MODULE__, addr, timeout \\ 5000, seq \\ nil) do
+    do_ping(icmp, addr, timeout, seq)
   end
-  defp handle_msg({:"$socket", _, _, _}, socket, state) do
-    # drop unidentifiable socket messages.
-    do_loop(socket, state)
+
+  defp do_ping(icmp, addr, timeout, seq) when is_binary(addr) do
+    do_ping(icmp, String.to_charlist(addr), timeout, seq)
   end
-  defp handle_msg({:"$gen_call", from, {:ping, ip, seq, timeout}}, socket, state) do
+  defp do_ping(icmp, addr, timeout, seq) when is_list(addr) do
+    case :inet.getaddrs(addr, :inet) do
+      {:ok, []} -> {:error, :enoaddr}
+      {:ok, lst} when is_list(lst) ->
+        do_ping(icmp, hd(lst), timeout, seq)
+      error -> error
+    end
+  end
+  defp do_ping(icmp, addr, timeout, seq) when IP.is_ipv4(addr) do
+    res = GenServer.call(icmp, {:ping, addr, seq || 0, timeout}, timeout)
+    if seq, do: {res, seq}, else: res
+  catch
+    :exit, {:timeout, _} ->
+      if seq, do: {:pang, seq}, else: :pang
+    :exit, error ->
+      {:error, error}
+  end
+
+  defp ping_impl(from, ip, seq, timeout, socket, state) do
     packet = %Packet{id: Packet.hash(from), seq: seq}
     |> Packet.encode()
 
@@ -132,13 +127,44 @@ defmodule Icmp do
 
         do_loop(socket, Map.put(state, Packet.hash(from), entry))
       _error ->
-        do_loop(socket, state)
+        state.module.close(socket)
     end
+  end
+
+  @doc false
+  # private "info" method to query the contents of the server.
+  def info(icmp), do: GenServer.call(icmp, :info)
+
+  defp info_impl(from, socket, state) do
+    GenServer.reply(from, {socket, state})
+  end
+
+  #######################################################################
+  ## ROUTER
+
+  defp handle_msg({:"$socket", socket, :select, ref},
+                  socket,
+                  state = %{select: {_, _, ref}}) do
+    # return to the socket loop
+    check_socket(socket, Map.delete(state, :select))
+  end
+  defp handle_msg({:"$socket", _, _, _}, socket, state) do
+    # drop unidentifiable socket messages.
+    do_loop(socket, state)
+  end
+  defp handle_msg({:"$gen_call", from, {:ping, ip, seq, timeout}}, socket, state) do
+    ping_impl(from, ip, seq, timeout, socket, state)
+  end
+  defp handle_msg({:"$gen_call", from, :info}, socket, state) do
+    info_impl(from, socket, state)
+    do_loop(socket, state)
   end
   defp handle_msg({:EXIT, _, _}, socket, state) do
     # trap exits and clean up the socket gracefully.
     state.module.close(socket)
   end
+
+  #######################################################################
 
   defp handle_ping(sockaddr, data, state) when is_binary(data) do
     # TODO: change this to a `with` chain.
@@ -172,6 +198,8 @@ defmodule Icmp do
   #defp hibernate(socket, state) do
   #  :proc_lib.hibernate(__MODULE__, :do_loop, [socket, state])
   #end
+
+  #######################################################################
 
   defp addr(ip), do: %IP.SockAddr{
     family: :inet,
