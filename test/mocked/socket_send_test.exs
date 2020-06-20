@@ -32,7 +32,7 @@ defmodule IcmpTest.Mocked.SocketSendTest do
 
     spawn fn ->
       # since we haven't instrumented a recvfrom, it should pang, with timeout.
-      assert :pang = Icmp.ping(srv, @cloudflare, 100)
+      assert :pang = Icmp.ping(@cloudflare, 100, srv)
       send(test_pid, :done)
     end
 
@@ -62,7 +62,7 @@ defmodule IcmpTest.Mocked.SocketSendTest do
 
     spawn fn ->
       # since we haven't instrumented a recvfrom, it should pang, with timeout.
-      assert {:error, _} = Icmp.ping(srv, @cloudflare, 100)
+      assert {:error, _} = Icmp.ping(@cloudflare, 100, srv)
       send(test_pid, :done)
     end
 
@@ -70,6 +70,5 @@ defmodule IcmpTest.Mocked.SocketSendTest do
 
     refute Process.alive?(srv)
   end
-
 
 end

@@ -10,17 +10,17 @@ defmodule IcmpTest do
   describe "with a new icmp connection" do
     test "we can ping cloudflare 1.1.1.1" do
       {:ok, srv} = Icmp.start_link()
-      assert :pong = Icmp.ping(srv, @cloudflare)
+      assert :pong = Icmp.ping(@cloudflare, 5000, srv)
     end
 
     test "we can ping localhost" do
       {:ok, srv} = Icmp.start_link()
-      assert :pong = Icmp.ping(srv, @localhost)
+      assert :pong = Icmp.ping(@localhost, 5000, srv)
     end
 
     test "with a string" do
       {:ok, srv} = Icmp.start_link()
-      assert :pong = Icmp.ping(srv, @google)
+      assert :pong = Icmp.ping(@google, 5000, srv)
     end
   end
 

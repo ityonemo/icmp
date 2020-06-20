@@ -1,5 +1,7 @@
 defmodule Icmp.Packet do
 
+  @moduledoc false
+
   @empty_payload <<0::56 * 8>>
 
   defstruct [:id,
