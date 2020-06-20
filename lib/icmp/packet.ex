@@ -30,8 +30,7 @@ defmodule Icmp.Packet do
         id :: 16, seq :: 16, payload :: binary>>)
   end
 
-
-  @spec behead(binary) :: binary
+  @spec behead(binary) :: {:ok, binary}
   @doc """
   strips the IPv4 header from the incoming data
   """
@@ -41,6 +40,10 @@ defmodule Icmp.Packet do
     {:ok, payload}
   end
 
+  @spec decode(binary) :: {:ok, t} | {:error, :packet}
+  @doc """
+  decodes an icmp packet and converts it to a structured datatype.
+  """
   def decode(<<0, 0, _checksum :: 16, id :: 16, seq :: 16, payload :: binary>>) do
     {:ok, %__MODULE__{type: :echo_reply, seq: seq, id: id, payload: payload}}
   end
