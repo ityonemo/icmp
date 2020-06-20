@@ -58,7 +58,8 @@ defmodule Icmp do
   #############################################################################
   ## PROCESS LOOP
 
-  defp do_loop(socket, state) do
+  @doc false
+  def do_loop(socket, state) do
     msg_or_icmp(socket, clear_dead(state))
   end
 
@@ -78,7 +79,7 @@ defmodule Icmp do
       do_loop(socket, state!)
     else
       {:select, select_ref} ->
-        do_loop(socket, Map.put(state!, :select, select_ref))
+        hibernate(socket, Map.put(state!, :select, select_ref))
       _error ->
         do_loop(socket, state!)
     end
@@ -168,14 +169,9 @@ defmodule Icmp do
 
   defp handle_ping(sockaddr, data, state) when is_binary(data) do
     # TODO: change this to a `with` chain.
-    packet = data
-    |> Packet.behead
-    |> Packet.decode
-
-    if packet do
+    with {:ok, packet_bin} <- Packet.behead(data),
+         {:ok, packet}     <- Packet.decode(packet_bin) do
       handle_ping(sockaddr.addr, packet, state)
-    else
-      {:error, :foo}
     end
   end
 
@@ -195,9 +191,9 @@ defmodule Icmp do
   end
   defp handle_ping(_, _, state), do: {:ok, state}
 
-  #defp hibernate(socket, state) do
-  #  :proc_lib.hibernate(__MODULE__, :do_loop, [socket, state])
-  #end
+  defp hibernate(socket, state) do
+    :proc_lib.hibernate(__MODULE__, :do_loop, [socket, state])
+  end
 
   #######################################################################
 
